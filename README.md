@@ -323,5 +323,119 @@ To add a new worker node copy the string above;
 Switch to a new node and paste this into the command line.
 You should see "This node joined a swarm as a worker"
 
+To get the command/token to join as a worker or manager use the following commands:
 
+  docker swarm join-token worker
+    To add a worker to this swarm, run the following command:
 
+      docker swarm join \
+      --token SWMTKN-1-46tsv11c9lahuwi53tlez2qqsdmp1p166b3j7vsw082pcuy8hn-c3s511zzhylg2e2ws0jw88xvt \
+      192.168.209.101:2377
+
+  docker swarm join-token manager
+    To add a manager to this swarm, run the following command:
+      docker swarm join \
+      --token SWMTKN-1-46tsv11c9lahuwi53tlez2qqsdmp1p166b3j7vsw082pcuy8hn-a8kr3euvto0e395zwmyhvof2t \
+      192.168.209.101:2377
+
+=========================
+Creating Services
+=========================
+First service we will create is for a  useful tool called "Service Visualizer" - available on Dockerhub at dockersamples/visualizer
+
+To create this service (as per the readme for visualizer) enter:
+  docker service create \
+  --name=viz \
+  --publish=8090:8080/tcp \
+  --constraint=node.role==manager \
+  --mount=type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+  dockersamples/visualizer
+
+Here we create a service named viz using the dockersamples/visualizer image, make it available on port 8090 (mapped internally to 8080), run it on manager nodes only and lastly make the docker socket file available to the srvice as a mount
+
+We can see the status of the service: 
+  docker service ls
+      ID            NAME  MODE        REPLICAS  IMAGE
+    fc3sfdzdcnyt  viz   replicated  1/1       dockersamples/visualizer:latest
+  
+  docker service inspect viz
+    <details of the service definition>
+  
+  docker service ps viz
+    ID            NAME   IMAGE                            NODE             DESIRED STATE  CURRENT STATE          ERROR  PORTS
+    mbexkhr0pegr  viz.1  dockersamples/visualizer:latest  centos4.gjj.com  Running        Running 9 seconds ago         
+
+As we can see above the service is running on centos4.gjj.com. 
+However - because of swarm service discovery - we can reach the service on any of the nodes - so we should be able to point a browser at any of the IPs with port 8090 and still hit the service:
+  http://192.168.209.101:8090
+  http://192.168.209.100:8090
+  http://192.168.209.102:8090
+  http://192.168.209.103:8090
+(and that works)
+
+If we now recreate the customer-api service - we can see it in the visualizer:
+  docker service create --name customer-api -p 3000:3000 swarmgs/customer
+
+And if we scale we can see the scaling happening in the visualizer
+  docker service scale customer-api=3
+The first time we do this ths process needs to download images on each node so is slow - but next time we scale it is very fast:
+  docker service scale customer-api=12
+  
+We can move the work off a node by using the drain option
+  docker node update --availability=drain 
+For example we can see via the visualiser or the docker node ps" command that the customer-api app is running on centos3:
+  docker node ls
+    ID                           HOSTNAME         STATUS  AVAILABILITY  MANAGER STATUS
+    296e07c8758frnwxq00c40grd    centos2.gjj.com  Ready   Active        
+    90pw0m079vl406jzn3ywu1651    centos4.gjj.com  Ready   Active        Leader
+    adyx5cnthqp5b2igb23lwiz6x    centos3.gjj.com  Ready   Active        
+    ypis1ql0595wp5hq7e3ex36yq *  centos1.gjj.com  Ready   Active        Reachable
+    
+  docker node ps adyx5cnthqp5b2igb23lwiz6x
+    ID            NAME             IMAGE                    NODE             DESIRED STATE  CURRENT STATE           ERROR  PORTS
+    od2nz0tcn1wf  customer-api.10  swarmgs/customer:latest  centos3.gjj.com  Running        Running 29 minutes ago         
+    yb82gn3qzy0v  customer-api.12  swarmgs/customer:latest  centos3.gjj.com  Running        Running 29 minutes ago
+
+So we can move the service off centos3 by doing:
+    docker node update --availability=drain adyx5cnthqp5b2igb23lwiz6x
+    
+Node centos3 now shows:
+    docker node ps adyx5cnthqp5b2igb23lwiz6x
+    ID            NAME             IMAGE                    NODE             DESIRED STATE  CURRENT STATE           ERROR  PORTS
+    od2nz0tcn1wf  customer-api.10  swarmgs/customer:latest  centos3.gjj.com  Shutdown       Shutdown 3 seconds ago         
+    yb82gn3qzy0v  customer-api.12  swarmgs/customer:latest  centos3.gjj.com  Shutdown       Shutdown 5 seconds ago   
+
+We can check where it is running:
+  docker node ps $(docker node ls -q)|grep -i running|grep -i customer
+  ID            NAME             IMAGE                            NODE             DESIRED STATE  CURRENT STATE            ERROR           xdafpe4mg28r  customer-api.10      swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           xdafpe4mg28r   \_ customer-api.10  swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           xdafpe4mg28r   \_ customer-api.10  swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           nbwnnzk8wija  customer-api.12      swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           nbwnnzk8wija   \_ customer-api.12  swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           nbwnnzk8wija   \_ customer-api.12  swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago
+  
+ So it is now running on centos4 - which can be confirmed by vizualizer
+ 
+We can use the "constraint" to specify various contraints as to where we want our service to run - contraints can be identified using the "docker node inspect" command eg "Architecture" or "OS", CPUs or Memeory, or we can add labels to a node and use those for contraints eg the following limits tasks for the redis service to nodes where the node type label equals "queue":
+
+  docker service create \
+   --name redis_2 \
+   --constraint 'node.labels.type == queue' \
+   redis:3.0.6
+
+We can add or remove contraints to a running service - --constraint-add	will add or update a placement constraint and --constraint-rm will remove a constraint
+ 
+We can also specify service placement preferences (--placement-pref) to divide tasks evenly over different categories of nodeseg to balance tasks over a set of datacenters or availability zones eg:
+  docker service create \
+    --replicas 9 \
+    --name redis_2 \
+    --placement-pref 'spread=node.labels.datacenter' \
+    redis:3.0.6
+  Uses the placement-pref "spread" strategy to spread tasks evenly over the values of the datacenter node label.
+  
+  Multiple placement-prefs can be definwd and the order specified sets the precedence eg:
+    docker service create \
+      --replicas 9 \
+      --name redis_2 \
+      --placement-pref 'spread=node.labels.datacenter' \
+      --placement-pref 'spread=node.labels.rack' \
+      redis:3.0.6
+  will spread task evenly across datacentres and then evemly across racks within the datacentres
+  
+  We can update a service placement-pref using docker service update, --placement-pref-add appends a new placement preference after all existing placement preferences. --placement-pref-rm removes an existing placement preference that matches the argument.
+  
