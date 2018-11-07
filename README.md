@@ -410,7 +410,11 @@ We can check where it is running:
   ID            NAME             IMAGE                            NODE             DESIRED STATE  CURRENT STATE            ERROR           xdafpe4mg28r  customer-api.10      swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           xdafpe4mg28r   \_ customer-api.10  swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           xdafpe4mg28r   \_ customer-api.10  swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           nbwnnzk8wija  customer-api.12      swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           nbwnnzk8wija   \_ customer-api.12  swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago           nbwnnzk8wija   \_ customer-api.12  swarmgs/customer:latest          centos4.gjj.com  Running        Running about a minute ago
   
  So it is now running on centos4 - which can be confirmed by vizualizer
- 
+
+As well as "drain" we can specifiy "active" or "pause". A node will stay in "drained" mode until set back to "active" (or "pause").
+Nodes in "pause" status will allow running tasks to continue but wont allow new tasks to be allocated.
+
+
 We can use the "constraint" to specify various contraints as to where we want our service to run - contraints can be identified using the "docker node inspect" command eg "Architecture" or "OS", CPUs or Memeory, or we can add labels to a node and use those for contraints eg the following limits tasks for the redis service to nodes where the node type label equals "queue":
 
   docker service create \
@@ -419,7 +423,22 @@ We can use the "constraint" to specify various contraints as to where we want ou
    redis:3.0.6
 
 We can add or remove contraints to a running service - --constraint-add	will add or update a placement constraint and --constraint-rm will remove a constraint
- 
+
+There is a good list of constraints in the dockerkit project readme on github:
+https://github.com/docker/swarmkit/blob/master/README.md
+
+node attribute	    matches	                                  example
+node.id	            node's ID	                                node.id == 2ivku8v2gvtg4
+node.hostname	      node's hostname	                          node.hostname != node-2
+node.ip	            node's IP address	                        node.ip != 172.19.17.0/24
+node.role	          node's manager or worker role	            node.role == manager
+node.platform.os	  node's operating system	                  node.platform.os == linux
+node.platform.arch	node's architecture	                      node.platform.arch == x86_64
+node.labels	        node's labels added by cluster admins	    node.labels.security == high
+engine.labels	      Docker Engine's labels	                  engine.labels.operatingsystem == ubuntu 14.04
+
+
+
 We can also specify service placement preferences (--placement-pref) to divide tasks evenly over different categories of nodeseg to balance tasks over a set of datacenters or availability zones eg:
   docker service create \
     --replicas 9 \
@@ -439,3 +458,18 @@ We can also specify service placement preferences (--placement-pref) to divide t
   
   We can update a service placement-pref using docker service update, --placement-pref-add appends a new placement preference after all existing placement preferences. --placement-pref-rm removes an existing placement preference that matches the argument.
   
+We've been using the default service mode of "replicated"
+There is also a mode "global" which puts an instance on each node - lets take a look at that via another service called google container advisor (google/cadvisor also in Dockerhub - see this article for info https://blog.codeship.com/monitoring-docker-containers-with-elasticsearch-and-cadvisor/):
+  
+  docker service create --network=monitoring --mode global --name cadvisor \
+  --mount type=bind,source=/,target=/rootfs,readonly=true \
+  --mount type=bind,source=/var/run,target=/var/run,readonly=false \
+  --mount type=bind,source=/sys,target=/sys,readonly=true \
+  --mount type=bind,source=/var/lib/docker/,target=/var/lib/docker,readonly=true \
+  google/cadvisor:latest 
+
+This creates an instance on every node in the swarm - good for monitoring for example
+
+
+
+
