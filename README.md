@@ -437,7 +437,27 @@ node.platform.arch	node's architecture	                      node.platform.arch 
 node.labels	        node's labels added by cluster admins	    node.labels.security == high
 engine.labels	      Docker Engine's labels	                  engine.labels.operatingsystem == ubuntu 14.04
 
+Note - if a service has no nodes that can fulfil a constraint then the service goes into pending mode
+eg this service must run on a node with hostname w4:
+  docker service create --name onw4 --constraint node.hostname==w4 -p 9090:80 nginx
+  
+  docker service ps onw4
+  ID            NAME    IMAGE         NODE  DESIRED STATE  CURRENT STATE           ERROR  PORTS
+  ovc22xpaq12l  onw4.1  nginx:latest        Running        Pending 56 seconds ago    
+As we can see the service is running but "pending" the constraint to be fulfilled - ie a node with hostname w4.
+Lets change that constraint to be hostname centos2.gjj.com
+  docker service update --constraint-rm node.hostname==w4 --constraint-add node.hostname==centos2.gjj.com onw4
 
+We now see:
+  docker service ps onw4
+    ID            NAME        IMAGE         NODE             DESIRED STATE  CURRENT STATE               ERROR  PORTS
+    poyrd52gaiho  onw4.1      nginx:latest  centos2.gjj.com  Running        Running about a minute ago         
+    ovc22xpaq12l   \_ onw4.1  nginx:latest                   Shutdown       Pending about a minute ago
+
+
+
+
+ 
 
 We can also specify service placement preferences (--placement-pref) to divide tasks evenly over different categories of nodeseg to balance tasks over a set of datacenters or availability zones eg:
   docker service create \
@@ -471,5 +491,99 @@ There is also a mode "global" which puts an instance on each node - lets take a 
 This creates an instance on every node in the swarm - good for monitoring for example
 
 
+===================
+Rolling Updates
+===================
+We can do rolling updates of our running images by using "docker service update" with the --update-parallelism - and we can add a delay between rollouts using the --update-delay flag eg:
 
+Create a new service:
+  docker service create --name pay -p 3000:3000 swarmgs/payroll:1         <-- use image "swarmgs/payroll" tag "1" 
+
+We can see the service runnign with image tag "1"
+  docker service ls
+    ID            NAME  MODE        REPLICAS  IMAGE
+    fc3sfdzdcnyt  viz   replicated  1/1       dockersamples/visualizer:latest
+    u6xkvqpixjb2  pay   replicated  1/1       swarmgs/payroll:1
+
+Lets scale it up to 6 so that it is running on several nodes
+  docker service scale pay=6
+
+We can now see 6 running:
+  docker service ls
+  ID            NAME  MODE        REPLICAS  IMAGE
+  fc3sfdzdcnyt  viz   replicated  1/1       dockersamples/visualizer:latest
+  u6xkvqpixjb2  pay   replicated  6/6       swarmgs/payroll:1
+
+So now lets update to tag "2"
+
+  docker service update --image swarmgs/payroll:2 pay
+
+The visualiser shows each node getting updated one at a time and "docker ps" shows us the history:
+
+  docker service ps pay
+  ID            NAME       IMAGE              NODE             DESIRED STATE  CURRENT STATE                ERROR  PORTS
+  z3aogvnogu4t  pay.1      swarmgs/payroll:2  centos2.gjj.com  Running        Running about a minute ago          
+  0q9m21d9j9tc   \_ pay.1  swarmgs/payroll:1  centos2.gjj.com  Shutdown       Shutdown about a minute ago         
+  oypmhm2zx01c  pay.2      swarmgs/payroll:2  centos1.gjj.com  Running        Running 47 seconds ago              
+  zq2883qxtz87   \_ pay.2  swarmgs/payroll:1  centos1.gjj.com  Shutdown       Shutdown 54 seconds ago             
+  g9bmnnvd0bb1  pay.3      swarmgs/payroll:2  centos3.gjj.com  Running        Running 55 seconds ago              
+  zcfoc8wiuv1p   \_ pay.3  swarmgs/payroll:1  centos3.gjj.com  Shutdown       Shutdown 56 seconds ago             
+  t5byuxrlrmci  pay.4      swarmgs/payroll:2  centos4.gjj.com  Running        Running about a minute ago          
+  tz2qbr4m7rrv   \_ pay.4  swarmgs/payroll:1  centos4.gjj.com  Shutdown       Shutdown about a minute ago         
+  8ebjkir197pj  pay.5      swarmgs/payroll:2  centos2.gjj.com  Running        Running 57 seconds ago              
+  vqqrl69cld0a   \_ pay.5  swarmgs/payroll:1  centos2.gjj.com  Shutdown       Shutdown about a minute ago         
+  y1313m8zo77z  pay.6      swarmgs/payroll:2  centos3.gjj.com  Running        Running about a minute ago          
+  cv1nm6pxuw0s   \_ pay.6  swarmgs/payroll:1  centos1.gjj.com  Shutdown       Shutdown about a minute ago 
+
+Lets update to tag "3" with a delaye between updates of 20secs and parallelism of 2 (so 2 itmes at a time)
+  docker service update --image swarmgs/payroll:3 --update-delay=20s --update-parallelism=2 pay
+
+  docker service ps pay
+    ID            NAME       IMAGE              NODE             DESIRED STATE  CURRENT STATE                     ERROR  PORTS
+  k4d792cgbrqx  pay.1      swarmgs/payroll:3  centos4.gjj.com  Ready          Preparing less than a second ago         
+  z3aogvnogu4t   \_ pay.1  swarmgs/payroll:2  centos2.gjj.com  Shutdown       Running less than a second ago           
+  0q9m21d9j9tc   \_ pay.1  swarmgs/payroll:1  centos2.gjj.com  Shutdown       Shutdown 11 minutes ago                  
+  ks3sz16umrd2  pay.2      swarmgs/payroll:3  centos1.gjj.com  Running        Running 20 seconds ago                   
+  oypmhm2zx01c   \_ pay.2  swarmgs/payroll:2  centos1.gjj.com  Shutdown       Shutdown 23 seconds ago                  
+  zq2883qxtz87   \_ pay.2  swarmgs/payroll:1  centos1.gjj.com  Shutdown       Shutdown 10 minutes ago                  
+  g9bmnnvd0bb1  pay.3      swarmgs/payroll:2  centos3.gjj.com  Running        Running 11 minutes ago                   
+  zcfoc8wiuv1p   \_ pay.3  swarmgs/payroll:1  centos3.gjj.com  Shutdown       Shutdown 11 minutes ago                  
+  fhj8kbzu7fox  pay.4      swarmgs/payroll:3  centos1.gjj.com  Running        Running 20 seconds ago                   
+  t5byuxrlrmci   \_ pay.4  swarmgs/payroll:2  centos4.gjj.com  Shutdown       Shutdown 24 seconds ago                  
+  tz2qbr4m7rrv   \_ pay.4  swarmgs/payroll:1  centos4.gjj.com  Shutdown       Shutdown 11 minutes ago                  
+  8ebjkir197pj  pay.5      swarmgs/payroll:2  centos2.gjj.com  Running        Running 11 minutes ago                   
+  vqqrl69cld0a   \_ pay.5  swarmgs/payroll:1  centos2.gjj.com  Shutdown       Shutdown 11 minutes ago                  
+  qdimnwuxix65  pay.6      swarmgs/payroll:3  centos4.gjj.com  Ready          Preparing less than a second ago         
+  y1313m8zo77z   \_ pay.6  swarmgs/payroll:2  centos3.gjj.com  Shutdown       Running less than a second ago           
+  cv1nm6pxuw0s   \_ pay.6  swarmgs/payroll:1  centos1.gjj.com  Shutdown       Shutdown 11 minutes ago   
+
+Using the same method we can roll back to a previous version - eg to roll bacl to "2":
+  docker service update --image swarmgs/payroll:2  --update-parallelism=2 pay
+We can see here that the service is partially updated:
+  docker service ps pay|grep -i running
+  k4d792cgbrqx  pay.1      swarmgs/payroll:3  centos4.gjj.com  Running        Running 5 minutes ago           
+  ks3sz16umrd2  pay.2      swarmgs/payroll:3  centos1.gjj.com  Running        Running 5 minutes ago           
+  w3bnmlbq0d6i  pay.3      swarmgs/payroll:3  centos2.gjj.com  Running        Running 5 minutes ago           
+  a16sqrt76wys  pay.4      swarmgs/payroll:2  centos3.gjj.com  Running        Running 12 seconds ago          
+  jdocqqsi0lzi  pay.5      swarmgs/payroll:2  centos3.gjj.com  Running        Running 12 seconds ago          
+  qdimnwuxix65  pay.6      swarmgs/payroll:3  centos4.gjj.com  Running        Running 5 minutes ago 
+  
+And if we wait and try again the service will have completely rilled back to "2"
+
+We can also use the "docker service rollback" command to roll back to the previous version of a service. After executing this command, the service is reverted to the configuration that was in place before the most recent docker service update command.
+
+We can specify these values on service creation or with a service update (ie without needing to update the service image)
+ eg:
+  docker service create \
+  --replicas 3 \
+  --name redis \
+  --update-delay 10s \
+  redis:3.0.6
+
+eg2:
+  docker service update  --update-parallelism 1 --update-delay 30s redis
+
+We can also specify what actoin should happen if an update fails eg that an update should rollback or that an update should rollback if (say) it has a 50% failure :
+  docker service update --quiet --detach=true --image $IMAGE --update-delay 15s \
+  --update-failure-action rollback --rollback-max-failure-ratio=0.5 --update-monitor 3m nginxhello
 
